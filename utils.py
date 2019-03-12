@@ -7,6 +7,11 @@ Date and time: 27/04/18 - 17:58
 
 import os
 import numpy as np
+from PIL import Image
+
+
+def load_image(filename):
+    return np.ascontiguousarray(Image.open(filename), dtype=np.uint8)
 
 
 def normalize(vector):
@@ -25,12 +30,11 @@ def create_folder(folder):
 
 
 def create_name_experiment(parameters, attribute_experiment):
-    name_experiment = '{}_{}_{}_{}_ncfl{}_{}'.format(parameters['dataset'],
-                                                     parameters['train_attribute'],
-                                                     parameters['test_attribute'],
-                                                     parameters['embedding_attribute'],
-                                                     parameters['nb_channels_first_layer'],
-                                                     attribute_experiment)
+    name_experiment = '{}_{}_{}_ncfl{}_{}'.format(parameters['dataset'],
+                                                  parameters['dataset_attribute'],
+                                                  parameters['embedding_attribute'],
+                                                  parameters['nb_channels_first_layer'],
+                                                  attribute_experiment)
 
     print('Name experiment: {}'.format(name_experiment))
 

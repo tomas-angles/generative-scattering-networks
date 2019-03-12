@@ -20,16 +20,16 @@ from tqdm import tqdm
 from EmbeddingsImagesDataset import EmbeddingsImagesDataset
 from generator_architecture import Generator, weights_init
 from utils import create_folder, normalize
+from pathlib import Path
 
 
 class GSN:
     def __init__(self, parameters):
-        dir_datasets = os.path.expanduser('~/datasets')
-        dir_experiments = os.path.expanduser('~/experiments')
+        dir_datasets = Path('~/datasets').expanduser()
+        dir_experiments = Path('~/experiments').expanduser()
 
         dataset = parameters['dataset']
-        train_attribute = parameters['train_attribute']
-        test_attribute = parameters['test_attribute']
+        dataset_attribute = parameters['dataset_attribute']
         embedding_attribute = parameters['embedding_attribute']
 
         self.dim = parameters['dim']
@@ -37,25 +37,31 @@ class GSN:
 
         name_experiment = parameters['name_experiment']
 
-        self.dir_x_train = os.path.join(dir_datasets, dataset, '{0}'.format(train_attribute))
-        self.dir_x_test = os.path.join(dir_datasets, dataset, '{0}'.format(test_attribute))
-        self.dir_z_train = os.path.join(dir_datasets, dataset, '{0}_{1}'.format(train_attribute, embedding_attribute))
-        self.dir_z_test = os.path.join(dir_datasets, dataset, '{0}_{1}'.format(test_attribute, embedding_attribute))
+        self.dir_x_train = dir_datasets / dataset / dataset_attribute / 'train'
+        self.dir_x_test = dir_datasets / dataset / dataset_attribute / 'test'
+        self.dir_z_train = dir_datasets / dataset / '{0}_{1}'.format(dataset_attribute, embedding_attribute) / 'train'
+        self.dir_z_test = dir_datasets / dataset / '{0}_{1}'.format(dataset_attribute, embedding_attribute) / 'test'
 
-        self.dir_experiment = os.path.join(dir_experiments, 'gsn_hf', name_experiment)
-        self.dir_models = os.path.join(self.dir_experiment, 'models')
-        self.dir_logs = os.path.join(self.dir_experiment, 'logs')
-        create_folder(self.dir_models)
-        create_folder(self.dir_logs)
+        self.dir_experiment = dir_experiments / 'gsn' / name_experiment
+        self.dir_models = self.dir_experiment / 'models'
+        self.dir_logs = self.dir_experiment / 'logs'
 
         self.batch_size = 128
         self.nb_epochs_to_save = 1
 
+    def make_dirs(self):
+        self.dir_experiment.mkdir()
+        self.dir_models.mkdir()
+        self.dir_logs.mkdir()
+
     def train(self, epoch_to_restore=0):
+        if epoch_to_restore == 0:
+            self.make_dirs()
+
         g = Generator(self.nb_channels_first_layer, self.dim)
 
         if epoch_to_restore > 0:
-            filename_model = os.path.join(self.dir_models, 'epoch_{}.pth'.format(epoch_to_restore))
+            filename_model = self.dir_models / 'epoch_{}.pth'.format(epoch_to_restore)
             g.load_state_dict(torch.load(filename_model))
         else:
             g.apply(weights_init)
@@ -71,7 +77,7 @@ class GSN:
         criterion = torch.nn.L1Loss()
 
         optimizer = optim.Adam(g.parameters())
-        writer = SummaryWriter(self.dir_logs)
+        writer = SummaryWriter(str(self.dir_logs))
 
         try:
             epoch = epoch_to_restore
@@ -82,8 +88,8 @@ class GSN:
 
                     for idx_batch, current_batch in enumerate(tqdm(dataloader)):
                         g.zero_grad()
-                        x = Variable(current_batch['x']).type(torch.FloatTensor).cuda()
-                        z = Variable(current_batch['z']).type(torch.FloatTensor).cuda()
+                        x = Variable(current_batch['x']).float().cuda()
+                        z = Variable(current_batch['z']).float().cuda()
                         g_z = g.forward(z)
 
                         loss = criterion(g_z, x)
@@ -92,7 +98,7 @@ class GSN:
 
                     writer.add_scalar('train_loss', loss, epoch)
 
-                z = Variable(fixed_batch['z']).type(torch.FloatTensor).cuda()
+                z = fixed_batch['z'].float().cuda()
                 g.eval()
                 g_z = g.forward(z)
                 images = make_grid(g_z.data[:16], nrow=4, normalize=True)
@@ -119,107 +125,109 @@ class GSN:
         _save_originals(self.dir_z_test, self.dir_x_test, 'test')
 
     def compute_errors(self, epoch):
-        filename_model = os.path.join(self.dir_models, 'epoch_{}.pth'.format(epoch))
+        filename_model = self.dir_models / 'epoch_{}.pth'.format(epoch)
         g = Generator(self.nb_channels_first_layer, self.dim)
         g.cuda()
         g.load_state_dict(torch.load(filename_model))
         g.eval()
 
-        criterion = torch.nn.MSELoss()
+        with torch.no_grad():
+            criterion = torch.nn.MSELoss()
 
-        def _compute_error(dir_z, dir_x, train_test):
-            dataset = EmbeddingsImagesDataset(dir_z, dir_x)
-            dataloader = DataLoader(dataset, batch_size=512, num_workers=4, pin_memory=True)
+            def _compute_error(dir_z, dir_x, train_test):
+                dataset = EmbeddingsImagesDataset(dir_z, dir_x)
+                dataloader = DataLoader(dataset, batch_size=512, num_workers=4, pin_memory=True)
 
-            error = 0
+                error = 0
 
-            for idx_batch, current_batch in enumerate(tqdm(dataloader)):
-                x = Variable(current_batch['x']).type(torch.FloatTensor).cuda()
-                z = Variable(current_batch['z']).type(torch.FloatTensor).cuda()
-                g_z = g.forward(z)
+                for idx_batch, current_batch in enumerate(tqdm(dataloader)):
+                    x = current_batch['x'].float().cuda()
+                    z = current_batch['z'].float().cuda()
+                    g_z = g.forward(z)
 
-                error += criterion(g_z, x).data.cpu().numpy()
+                    error += criterion(g_z, x).data.cpu().numpy()
 
-            error /= len(dataloader)
+                error /= len(dataloader)
 
-            print('Error for {}: {}'.format(train_test, error))
+                print('Error for {}: {}'.format(train_test, error))
 
-        _compute_error(self.dir_z_train, self.dir_x_train, 'train')
-        _compute_error(self.dir_z_test, self.dir_x_test, 'test')
+            _compute_error(self.dir_z_train, self.dir_x_train, 'train')
+            _compute_error(self.dir_z_test, self.dir_x_test, 'test')
 
     def generate_from_model(self, epoch):
-        filename_model = os.path.join(self.dir_models, 'epoch_{}.pth'.format(epoch))
+        filename_model = self.dir_models / 'epoch_{}.pth'.format(epoch)
         g = Generator(self.nb_channels_first_layer, self.dim)
         g.load_state_dict(torch.load(filename_model))
         g.cuda()
         g.eval()
 
-        def _generate_from_model(dir_z, dir_x, train_test):
-            dataset = EmbeddingsImagesDataset(dir_z, dir_x)
-            fixed_dataloader = DataLoader(dataset, 16)
-            fixed_batch = next(iter(fixed_dataloader))
+        with torch.no_grad():
+            def _generate_from_model(dir_z, dir_x, train_test):
+                dataset = EmbeddingsImagesDataset(dir_z, dir_x)
+                fixed_dataloader = DataLoader(dataset, 16)
+                fixed_batch = next(iter(fixed_dataloader))
 
-            z = Variable(fixed_batch['z']).type(torch.FloatTensor).cuda()
-            g_z = g.forward(z)
-            filename_images = os.path.join(self.dir_experiment, 'epoch_{}_{}.png'.format(epoch, train_test))
-            temp = make_grid(g_z.data[:16], nrow=4).cpu().numpy().transpose((1, 2, 0))
-            Image.fromarray(np.uint8((temp + 1) * 127.5)).save(filename_images)
+                z = fixed_batch['z'].float().cuda()
+                g_z = g.forward(z)
+                filename_images = self.dir_experiment / 'epoch_{}_{}.png'.format(epoch, train_test)
+                temp = make_grid(g_z.data[:16], nrow=4).cpu().numpy().transpose((1, 2, 0))
+                Image.fromarray(np.uint8((temp + 1) * 127.5)).save(filename_images)
 
-        _generate_from_model(self.dir_z_train, self.dir_x_train, 'train')
-        _generate_from_model(self.dir_z_test, self.dir_x_test, 'test')
+            _generate_from_model(self.dir_z_train, self.dir_x_train, 'train')
+            _generate_from_model(self.dir_z_test, self.dir_x_test, 'test')
 
-        def _generate_path(dir_z, dir_x, train_test):
-            dataset = EmbeddingsImagesDataset(dir_z, dir_x)
-            fixed_dataloader = DataLoader(dataset, 2, shuffle=True)
-            fixed_batch = next(iter(fixed_dataloader))
+            def _generate_path(dir_z, dir_x, train_test):
+                dataset = EmbeddingsImagesDataset(dir_z, dir_x)
+                fixed_dataloader = DataLoader(dataset, 2, shuffle=True)
+                fixed_batch = next(iter(fixed_dataloader))
 
-            z0 = fixed_batch['z'][[0]].numpy()
-            z1 = fixed_batch['z'][[1]].numpy()
+                z0 = fixed_batch['z'][[0]].numpy()
+                z1 = fixed_batch['z'][[1]].numpy()
 
-            batch_z = np.copy(z0)
+                batch_z = np.copy(z0)
 
-            nb_samples = 100
+                nb_samples = 100
 
-            interval = np.linspace(0, 1, nb_samples)
-            for t in interval:
-                if t > 0:
-                    zt = normalize((1 - t) * z0 + t * z1)
-                    batch_z = np.vstack((batch_z, zt))
+                interval = np.linspace(0, 1, nb_samples)
+                for t in interval:
+                    if t > 0:
+                        zt = normalize((1 - t) * z0 + t * z1)
+                        batch_z = np.vstack((batch_z, zt))
 
-            z = Variable(torch.from_numpy(batch_z)).type(torch.FloatTensor).cuda()
-            g_z = g.forward(z)
+                z = torch.from_numpy(batch_z).float().cuda()
+                g_z = g.forward(z)
 
-            # filename_images = os.path.join(self.dir_experiment, 'path_epoch_{}_{}.png'.format(epoch, train_test))
-            # temp = make_grid(g_z.data, nrow=nb_samples).cpu().numpy().transpose((1, 2, 0))
-            # Image.fromarray(np.uint8((temp + 1) * 127.5)).save(filename_images)
+                # filename_images = os.path.join(self.dir_experiment, 'path_epoch_{}_{}.png'.format(epoch, train_test))
+                # temp = make_grid(g_z.data, nrow=nb_samples).cpu().numpy().transpose((1, 2, 0))
+                # Image.fromarray(np.uint8((temp + 1) * 127.5)).save(filename_images)
 
-            g_z = g_z.data.cpu().numpy().transpose((0, 2, 3, 1))
+                g_z = g_z.data.cpu().numpy().transpose((0, 2, 3, 1))
 
-            folder_to_save = os.path.join(self.dir_experiment, 'epoch_{}_{}_path'.format(epoch, train_test))
-            create_folder(folder_to_save)
+                folder_to_save = self.dir_experiment / 'epoch_{}_{}_path'.format(epoch, train_test)
+                create_folder(folder_to_save)
 
-            for idx in range(nb_samples):
-                filename_image = os.path.join(folder_to_save, '{}.png'.format(idx))
-                Image.fromarray(np.uint8((g_z[idx] + 1) * 127.5)).save(filename_image)
+                for idx in range(nb_samples):
+                    filename_image = os.path.join(folder_to_save, '{}.png'.format(idx))
+                    Image.fromarray(np.uint8((g_z[idx] + 1) * 127.5)).save(filename_image)
 
-        _generate_path(self.dir_z_train, self.dir_x_train, 'train')
-        _generate_path(self.dir_z_test, self.dir_x_test, 'test')
+            _generate_path(self.dir_z_train, self.dir_x_train, 'train')
+            _generate_path(self.dir_z_test, self.dir_x_test, 'test')
 
-        def _generate_random():
-            nb_samples = 16
-            z = np.random.randn(nb_samples, self.dim)
-            norms = np.sqrt(np.sum(z ** 2, axis=1))
-            norms = np.expand_dims(norms, axis=1)
-            norms = np.repeat(norms, self.dim, axis=1)
-            z /= norms
+            def _generate_random():
+                nb_samples = 16
+                z = np.random.randn(nb_samples, self.dim)
+                norms = np.sqrt(np.sum(z ** 2, axis=1))
+                norms = np.expand_dims(norms, axis=1)
+                norms = np.repeat(norms, self.dim, axis=1)
+                z /= norms
 
-            z = Variable(torch.from_numpy(z)).type(torch.FloatTensor).cuda()
-            g_z = g.forward(z)
-            filename_images = os.path.join(self.dir_experiment, 'epoch_{}_random.png'.format(epoch))
-            temp = make_grid(g_z.data[:16], nrow=4).cpu().numpy().transpose((1, 2, 0))
-            Image.fromarray(np.uint8((temp + 1) * 127.5)).save(filename_images)
+                z = torch.from_numpy(z).float().cuda()
+                g_z = g.forward(z)
+                filename_images = os.path.join(self.dir_experiment, 'epoch_{}_random.png'.format(epoch))
+                temp = make_grid(g_z.data[:16], nrow=4).cpu().numpy().transpose((1, 2, 0))
+                Image.fromarray(np.uint8((temp + 1) * 127.5)).save(filename_images)
 
-        _generate_random()
+            _generate_random()
 
     def analyze_model(self, epoch):
         filename_model = os.path.join(self.dir_models, 'epoch_{}.pth'.format(epoch))
