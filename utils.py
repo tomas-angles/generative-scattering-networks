@@ -6,6 +6,8 @@ Date and time: 27/04/18 - 17:58
 """
 
 import os
+from datetime import datetime
+
 import numpy as np
 from PIL import Image
 
@@ -39,3 +41,25 @@ def create_name_experiment(parameters, attribute_experiment):
     print('Name experiment: {}'.format(name_experiment))
 
     return name_experiment
+
+
+class AverageMeter(object):
+    """
+    Computes and stores the average and current value
+    """
+
+    def __init__(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def now():
+    return datetime.now().strftime("%d%m%Y%H%M%S")
