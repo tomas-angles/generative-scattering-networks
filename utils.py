@@ -63,3 +63,10 @@ class AverageMeter(object):
 
 def now():
     return datetime.now().strftime("%d%m%Y%H%M%S")
+
+
+def get_hms(seconds):
+    seconds = int(seconds)
+    minutes = seconds // 60
+    rseconds = seconds - 60 * minutes
+    return '{}m{}s'.format(minutes, rseconds)

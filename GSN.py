@@ -6,6 +6,7 @@ Date and time: 27/04/18 - 17:58
 """
 
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,7 @@ from tqdm import tqdm
 
 from EmbeddingsImagesDataset import EmbeddingsImagesDataset
 from generator_architecture import Generator, weights_init
-from utils import create_folder, AverageMeter, now
+from utils import create_folder, AverageMeter, now, get_hms
 
 
 class GSN:
@@ -74,7 +75,7 @@ class GSN:
         dataset_train = EmbeddingsImagesDataset(self.dir_z_train, self.dir_x_train)
         dataloader_train = DataLoader(dataset_train, self.batch_size, shuffle=True, num_workers=4, pin_memory=True)
         dataset_test = EmbeddingsImagesDataset(self.dir_z_test, self.dir_x_test)
-        dataloader_test = DataLoader(dataset_test, self.batch_size, shuffle=False, pin_memory=True)
+        dataloader_test = DataLoader(dataset_test, self.batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
         criterion = torch.nn.L1Loss()
 
@@ -85,11 +86,13 @@ class GSN:
         try:
             epoch = epoch_to_restore
             while True:
+                start_time = time.time()
+
                 g.train()
                 for _ in range(self.nb_epochs_to_save):
                     epoch += 1
 
-                    for idx_batch, current_batch in enumerate(tqdm(dataloader_train)):
+                    for idx_batch, current_batch in enumerate(dataloader_train):
                         g.zero_grad()
                         x = Variable(current_batch['x']).float().cuda()
                         z = Variable(current_batch['z']).float().cuda()
@@ -103,18 +106,20 @@ class GSN:
                 with torch.no_grad():
                     train_l1_loss = AverageMeter()
                     for idx_batch, current_batch in enumerate(dataloader_train):
+                        if idx_batch == 32:
+                            break
                         x = current_batch['x'].float().cuda()
                         z = current_batch['z'].float().cuda()
                         g_z = g.forward(z)
                         loss = criterion(g_z, x)
                         train_l1_loss.update(loss)
-                        if idx_batch == 63:
-                            break
 
                     writer_train.add_scalar('l1_loss', train_l1_loss.avg, epoch)
 
                     test_l1_loss = AverageMeter()
                     for idx_batch, current_batch in enumerate(dataloader_test):
+                        if idx_batch == 32:
+                            break
                         x = current_batch['x'].float().cuda()
                         z = current_batch['z'].float().cuda()
                         g_z = g.forward(z)
@@ -128,6 +133,9 @@ class GSN:
                 if epoch % self.nb_epochs_to_save == 0:
                     filename = os.path.join(self.dir_models, 'epoch_{}.pth'.format(epoch))
                     torch.save(g.state_dict(), filename)
+
+                end_time = time.time()
+                print("[*] Finished epoch {} in {}".format(epoch, get_hms(end_time - start_time)))
 
         finally:
             print('[*] Closing Writer.')
@@ -186,32 +194,28 @@ class GSN:
         g.eval()
         return g
 
-    def conditional_generation(self, epoch_to_load):
+    def conditional_generation(self, epoch_to_load, idx_image, z_initial_idx, z_end_idx):
         g = self.get_generator(epoch_to_load)
 
-        dir_to_save = self.dir_experiment / 'conditional_generation_epoch{}_{}'.format(epoch_to_load, now())
+        dir_to_save = self.dir_experiment / 'conditional_generation_epoch{}_img{}_zi{}_ze{}_{}'.format(epoch_to_load, idx_image,
+                                                                                                       z_initial_idx, z_end_idx, now())
         dir_to_save.mkdir()
 
         with torch.no_grad():
             def _generate_random(dir_z, dir_x):
-                nb_samples = 1
                 dataset = EmbeddingsImagesDataset(dir_z, dir_x)
-                fixed_dataloader = DataLoader(dataset, nb_samples, shuffle=True)
+                fixed_dataloader = DataLoader(dataset, idx_image + 1, shuffle=False)
                 fixed_batch = next(iter(fixed_dataloader))
 
-                x = fixed_batch['x']
+                x = fixed_batch['x'][[idx_image]]
                 filename_images = os.path.join(dir_to_save, 'original.png'.format(epoch_to_load))
                 temp = make_grid(x.data, nrow=1).cpu().numpy().transpose((1, 2, 0))
                 Image.fromarray(np.uint8((temp + 1) * 127.5)).save(filename_images)
 
-                initial_idx = 500
-
-                z0 = fixed_batch['z'][[0]].numpy()
+                z0 = fixed_batch['z'][[idx_image]].numpy()
                 nb_samples = 16
-                z0 = np.repeat(z0, nb_samples, axis=0)
-
-                batch_z = np.random.randn(nb_samples, self.dim)
-                batch_z[:, initial_idx:] = z0[:, initial_idx:]
+                batch_z = np.repeat(z0, nb_samples, axis=0)
+                batch_z[:, z_initial_idx:z_end_idx] = np.random.randn(nb_samples, z_end_idx - z_initial_idx)
                 z = torch.from_numpy(batch_z).float().cuda()
 
                 g_z = g.forward(z)

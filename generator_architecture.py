@@ -44,6 +44,11 @@ class Generator(nn.Module):
             ConvBlock(nb_channels_first_layer * 8, nb_channels_first_layer * 4, upsampling=True),
             ConvBlock(nb_channels_first_layer * 4, nb_channels_first_layer * 2, upsampling=True),
             ConvBlock(nb_channels_first_layer * 2, nb_channels_first_layer, upsampling=True),
+            # ConvBlock(nb_channels_first_layer * 2, nb_channels_first_layer * 2, upsampling=True),
+            # ConvBlock(nb_channels_first_layer * 2, nb_channels_first_layer * 2, upsampling=False),
+            # ConvBlock(nb_channels_first_layer * 2, nb_channels_first_layer * 2, upsampling=False),
+            # ConvBlock(nb_channels_first_layer * 2, nb_channels_first_layer, upsampling=False),
+            # ConvBlock(nb_channels_first_layer, nb_channels_first_layer, upsampling=False),
 
             ConvBlock(nb_channels_first_layer, nb_channels_output=3, tanh=True)
         )
